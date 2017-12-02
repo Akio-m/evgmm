@@ -1,0 +1,2 @@
+# evgmm
+eigenvoice gmm testing.
