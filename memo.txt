@@ -1,3 +1,129 @@
 __measure_target = 'adaptation/EJM04/V01/T01/TIMIT/000/*.wav'
 for_measure_target = __same_path + __measure_target
 mcd_text = __output_path + __versions + '_MCD.txt'
+
+
+
+
+    tempF0 = input_f0[ np.where(input_f0 > 0)]
+    fixed_logF0 = np.log(tempF0)
+    #logF0 = np.ma.log(input_f0) # 0要素にlogをするとinfになるのでmaskする
+    #fixed_logF0 = np.ma.fix_invalid(logF0).data # maskを取る
+
+
+
+
+def calc_mcd(source, convert, target):
+    """
+    変換する前の音声と目標音声でDTWを行う.
+    その後,変換後の音声と目標音声とのMCDを計測する.
+    """
+    dist, cost, acc, path = dtw(source, target, dist=lambda x, y: norm(x-y, ord=1))
+    aligned = alignment(source, target, path)
+    
+    return 10.0 / np.log(10) * np.sqrt(2 * np.sum(np.square(aligned - convert))), aligned
+
+
+
+"""
+変換を行う.
+"""
+
+timer_start = time.time()
+
+# 事前に目標話者の標準偏差と平均を求めておく
+temp_f = None
+for x in range(len(target_f0)):
+    temp = target_f0[x].flatten()
+    if temp_f is None:
+        temp_f = temp
+    else:
+        temp_f = np.hstack((temp_f, temp)) 
+target_std, target_mean = calc_std_mean(temp_f)
+
+# 変換
+output_mfcc = []
+filer = open(mcd_text, 'a')
+for i in range(len(source_data_mfcc)):   
+    print("voice no = ", i)
+    # convert
+    source_temp = source_data_mfcc[i]
+    output_mfcc = np.array([convert(source_temp[frame], covarXX, fitted_source, fitted_target, covarYX, weights, source_means)[0] for frame in range(source_temp.shape[0])])
+    
+    # syntehsis
+    source_sp_temp = source_data_sp[i]
+    source_f0_temp = source_data_f0[i]
+    source_ap_temp = source_data_ap[i]
+    output_imfcc = mfcc_source.imfcc(output_mfcc, source_sp_temp)
+    y_source = pw.synthesize(source_f0_temp, output_imfcc, source_ap_temp, fs_source, 5)
+    np.save(converted_voice_npy + "s{0}.npy".format(i), output_imfcc)
+    sf.write(converted_voice_wav + "s{0}.wav".format(i), y_source, fs_source)
+    
+    # calc MCD
+    measure_temp = measure_target_data_mfcc[i]
+    mcd, aligned_measure = calc_mcd(source_temp, output_mfcc, measure_temp)
+    filer.write("MCD No.{0} = {1} , shape = {2}\n".format(i, mcd, source_temp.shape))
+    
+    # save figure spectram
+    range_s = output_imfcc.shape[0]
+    scale = [x for x in range(range_s)]
+    MFCC_sample_s = [source_temp[x][0] for x in range(range_s)]
+    MFCC_sample_c = [output_mfcc[x][0] for x in range(range_s)]
+    MFCC_sample_t = [aligned_measure[x][0] for x in range(range_s)]
+    
+    plt.subplot(311)
+    plt.plot(scale, MFCC_sample_s, label="source", linewidth = 1.0)
+    plt.plot(scale, MFCC_sample_c, label="convert", linewidth = 1.0)
+    plt.plot(scale, MFCC_sample_t, label="target", linewidth = 1.0, linestyle="dashed")
+    plt.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, ncol=3, mode="expand", borderaxespad=0.)
+    #plt.xlabel("Flame")
+    #plt.ylabel("amplitude MFCC")
+    
+    MFCC_sample_s = [source_temp[x][1] for x in range(range_s)]
+    MFCC_sample_c = [output_mfcc[x][1] for x in range(range_s)]
+    MFCC_sample_t = [aligned_measure[x][1] for x in range(range_s)]
+    
+    plt.subplot(312)
+    plt.plot(scale, MFCC_sample_s, label="source", linewidth = 1.0)
+    plt.plot(scale, MFCC_sample_c, label="convert", linewidth = 1.0)
+    plt.plot(scale, MFCC_sample_t, label="target", linewidth = 1.0, linestyle="dashed")
+    plt.ylabel("amplitude MFCC")
+    
+    MFCC_sample_s = [source_temp[x][2] for x in range(range_s)]
+    MFCC_sample_c = [output_mfcc[x][2] for x in range(range_s)]
+    MFCC_sample_t = [aligned_measure[x][2] for x in range(range_s)]
+    
+    plt.subplot(313)
+    plt.plot(scale, MFCC_sample_s, label="source", linewidth = 1.0)
+    plt.plot(scale, MFCC_sample_c, label="convert", linewidth = 1.0)
+    plt.plot(scale, MFCC_sample_t, label="target", linewidth = 1.0, linestyle="dashed")
+    plt.xlabel("Flame")
+
+    plt.savefig(mfcc_save_fig_png + "s{0}.png".format(i) , format='png', dpi=300)
+    plt.close()
+    
+    # synthesis with conveted f0
+    source_std, source_mean = calc_std_mean(source_f0_temp)
+    std_ratio = target_std / source_std
+    log_conv_f0 = std_ratio * (source_f0_temp - source_mean) + target_mean
+    conv_f0 = np.maximum(log_conv_f0, 0)
+    np.save(converted_voice_npy + "f{0}.npy".format(i), conv_f0)
+    
+    y_conv = pw.synthesize(conv_f0, output_imfcc, source_ap_temp, fs_source, 5)
+    sf.write(converted_voice_with_f0_wav + "sf{0}.wav".format(i) , y_conv, fs_source)
+    
+    # save figure f0
+    F0_s = [source_f0_temp[x] for x in range(range_s)]
+    F0_c = [conv_f0[x] for x in range(range_s)]
+    
+    plt.plot(scale, F0_s, label="source", linewidth = 1.0)
+    plt.plot(scale, F0_c, label="convert", linewidth = 1.0)
+    plt.legend(bbox_to_anchor=(0., 1.02, 1., .102), loc=3, ncol=2, mode="expand", borderaxespad=0.)
+    plt.xlabel("Frame")
+    plt.ylabel("Amplitude")
+    
+    plt.savefig(f0_save_fig_png + "f{0}.png".format(i), format='png', dpi=300)
+    plt.close()
+    
+filer.close()
+print("Make Converted Spectram time = ", time.time() - timer_start , "[sec]")
