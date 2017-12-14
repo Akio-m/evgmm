@@ -1,0 +1,3 @@
+__measure_target = 'adaptation/EJM04/V01/T01/TIMIT/000/*.wav'
+for_measure_target = __same_path + __measure_target
+mcd_text = __output_path + __versions + '_MCD.txt'
